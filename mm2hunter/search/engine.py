@@ -1,10 +1,15 @@
 """
 Serper.dev search client – discovers MM2 shop URLs.
+
+Supports:
+  - Built-in queries or loading custom queries from a TXT file
+  - Multiple pages per query for more results
 """
 
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 import httpx
@@ -18,7 +23,7 @@ logger = get_logger("search_engine")
 # ---------------------------------------------------------------------------
 # Pre-built search queries targeting MM2 shops
 # ---------------------------------------------------------------------------
-SEARCH_QUERIES: List[str] = [
+DEFAULT_QUERIES: List[str] = [
     '"Murder Mystery 2" "Harvester" "Add Funds" "Powered by Stripe"',
     '"MM2" shop "Harvester" buy "Add Funds" stripe',
     '"Murder Mystery 2" shop buy "Harvester" wallet "add funds"',
@@ -34,6 +39,27 @@ SEARCH_QUERIES: List[str] = [
 ROTATE_STATUS_CODES = {403, 429}
 
 
+def load_queries_from_file(path: str) -> List[str]:
+    """Load search queries from a TXT file (one query per line).
+
+    Blank lines and lines starting with '#' are ignored.
+    """
+    file_path = Path(path)
+    if not file_path.exists():
+        logger.error("Queries file not found: %s", path)
+        return []
+
+    queries: List[str] = []
+    with open(file_path, encoding="utf-8") as fh:
+        for line in fh:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                queries.append(stripped)
+
+    logger.info("Loaded %d queries from %s", len(queries), path)
+    return queries
+
+
 class SearchEngine:
     """Sends queries to Serper.dev and collects unique result URLs."""
 
@@ -43,27 +69,64 @@ class SearchEngine:
         self._seen_urls: Set[str] = set()
 
     # ------------------------------------------------------------------
+    def _get_queries(self) -> List[str]:
+        """Return the list of queries to execute.
+
+        If a queries file is configured and valid, those queries are used.
+        Otherwise, fall back to the built-in default queries.
+        """
+        if self._cfg.queries_file:
+            custom = load_queries_from_file(self._cfg.queries_file)
+            if custom:
+                return custom
+            logger.warning(
+                "Queries file was empty or missing – falling back to defaults."
+            )
+        return list(DEFAULT_QUERIES)
+
+    # ------------------------------------------------------------------
     async def search_all(self) -> List[Dict]:
-        """Run every pre-built query and return de-duplicated results."""
+        """Run every query (possibly multiple pages each) and return
+        de-duplicated results."""
+        queries = self._get_queries()
         all_results: List[Dict] = []
-        for query in SEARCH_QUERIES:
-            try:
-                results = await self._search(query)
-                all_results.extend(results)
-            except KeyExhaustedError:
-                logger.error("All API keys exhausted – stopping search early.")
-                break
-            except Exception as exc:
-                logger.error("Query failed: %s – %s", query[:60], exc)
+        pages = max(1, self._cfg.pages_per_query)
+
+        for query in queries:
+            for page_num in range(1, pages + 1):
+                try:
+                    results = await self._search(query, page=page_num)
+                    all_results.extend(results)
+                except KeyExhaustedError:
+                    logger.error("All API keys exhausted – stopping search early.")
+                    break
+                except Exception as exc:
+                    logger.error(
+                        "Query failed (page %d): %s – %s", page_num, query[:60], exc
+                    )
+            else:
+                continue  # inner loop finished normally
+            break  # KeyExhaustedError – stop outer loop too
+
         logger.info(
             "Search complete: %d unique URLs discovered.", len(self._seen_urls)
         )
         return all_results
 
     # ------------------------------------------------------------------
-    async def _search(self, query: str) -> List[Dict]:
-        """Execute a single search query with automatic key rotation."""
-        payload = {"q": query, "num": self._cfg.results_per_query}
+    async def _search(self, query: str, *, page: int = 1) -> List[Dict]:
+        """Execute a single search query with automatic key rotation.
+
+        Serper.dev uses a 'page' parameter (1-based) or 'start' offset.
+        We use the 'page' parameter for pagination.
+        """
+        payload: Dict = {
+            "q": query,
+            "num": self._cfg.results_per_query,
+        }
+        if page > 1:
+            payload["page"] = page
+
         attempt = 0
         max_attempts = self._km.alive_count * self._cfg.max_retries_per_key
 
@@ -90,13 +153,15 @@ class SearchEngine:
             except KeyExhaustedError:
                 raise
             except httpx.HTTPStatusError as exc:
-                logger.warning("HTTP error %s – rotating key.", exc.response.status_code)
+                logger.warning(
+                    "HTTP error %s – rotating key.", exc.response.status_code
+                )
                 self._km.rotate(reason=str(exc))
             except httpx.RequestError as exc:
                 logger.warning("Request error: %s", exc)
                 await asyncio.sleep(1)
 
-        logger.warning("Max attempts reached for query: %s", query[:60])
+        logger.warning("Max attempts reached for query: %s (page %d)", query[:60], page)
         return []
 
     # ------------------------------------------------------------------
@@ -120,3 +185,8 @@ class SearchEngine:
     @property
     def discovered_count(self) -> int:
         return len(self._seen_urls)
+
+    @property
+    def all_discovered_urls(self) -> List[str]:
+        """Return a sorted list of all discovered URLs."""
+        return sorted(self._seen_urls)

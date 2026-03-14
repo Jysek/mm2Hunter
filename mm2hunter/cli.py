@@ -25,7 +25,17 @@ def _parse_args() -> argparse.Namespace:
     sub = parser.add_subparsers(dest="command")
 
     # search ------------------------------------------------------------------
-    sub.add_parser("search", help="Run the search & validation pipeline")
+    search_p = sub.add_parser("search", help="Run the search & validation pipeline")
+    search_p.add_argument(
+        "--queries-file", "-q",
+        type=str, default=None,
+        help="Path to a TXT file with custom queries (one per line)",
+    )
+    search_p.add_argument(
+        "--pages", "-p",
+        type=int, default=None,
+        help="Number of result pages to fetch per query (default: 1)",
+    )
 
     # dashboard ---------------------------------------------------------------
     dash_p = sub.add_parser("dashboard", help="Start the web dashboard only")
@@ -34,6 +44,16 @@ def _parse_args() -> argparse.Namespace:
     # run (full) --------------------------------------------------------------
     run_p = sub.add_parser("run", help="Run pipeline then start the dashboard")
     run_p.add_argument("--port", type=int, default=None, help="Dashboard port")
+    run_p.add_argument(
+        "--queries-file", "-q",
+        type=str, default=None,
+        help="Path to a TXT file with custom queries (one per line)",
+    )
+    run_p.add_argument(
+        "--pages", "-p",
+        type=int, default=None,
+        help="Number of result pages to fetch per query (default: 1)",
+    )
 
     return parser.parse_args()
 
@@ -45,6 +65,13 @@ def main() -> None:
 
     if args.command in ("dashboard", "run") and getattr(args, "port", None):
         cfg.dashboard.port = args.port
+
+    # Apply search-related CLI overrides
+    if args.command in ("search", "run"):
+        if getattr(args, "queries_file", None):
+            cfg.serper.queries_file = args.queries_file
+        if getattr(args, "pages", None):
+            cfg.serper.pages_per_query = max(1, args.pages)
 
     # Lazy import to keep startup fast
     from mm2hunter.orchestrator import run_dashboard, run_full, run_pipeline

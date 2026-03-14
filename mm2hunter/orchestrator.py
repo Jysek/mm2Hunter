@@ -19,6 +19,21 @@ from mm2hunter.utils.logging import get_logger
 logger = get_logger("orchestrator")
 
 
+def _save_discovered_urls(urls: List[str], data_dir: Path) -> Path:
+    """Save all discovered URLs to a TXT file BEFORE validation.
+
+    This allows users to see which sites were found even if validation
+    crashes or is interrupted.
+    """
+    out_path = data_dir / "discovered_urls.txt"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as fh:
+        for url in urls:
+            fh.write(url + "\n")
+    logger.info("Saved %d discovered URLs → %s", len(urls), out_path)
+    return out_path
+
+
 async def run_pipeline(config: AppConfig | None = None) -> List[ValidationResult]:
     """Execute the full discovery → validate → report pipeline."""
     cfg = config or get_config()
@@ -33,6 +48,9 @@ async def run_pipeline(config: AppConfig | None = None) -> List[ValidationResult
     if not urls:
         logger.warning("No URLs found – check your API keys / queries.")
         return []
+
+    # 1b. Save discovered URLs BEFORE validation ----------------------------
+    _save_discovered_urls(urls, cfg.data_dir)
 
     # 2. Validation phase ---------------------------------------------------
     logger.info("=== Phase 2: Site Validation ===")
@@ -64,7 +82,11 @@ async def run_dashboard(config: AppConfig | None = None) -> None:
     cfg = config or get_config()
     dash = Dashboard(cfg.dashboard, cfg.data_dir)
     await dash.start()
-    logger.info("Dashboard is live. Press Ctrl+C to stop.")
+    logger.info(
+        "Dashboard is live at http://%s:%s – Press Ctrl+C to stop.",
+        cfg.dashboard.host,
+        cfg.dashboard.port,
+    )
     # Keep running forever
     await asyncio.Event().wait()
 
