@@ -2,7 +2,7 @@
 Playwright-based scraper that validates discovered MM2 shop sites.
 
 Checks performed per site:
-  1. Stripe payment gateway detection
+  1. Stripe payment gateway detection  (deep: HTML, DOM, scripts, network, iframes)
   2. "Add Funds" / wallet system detection
   3. Harvester item – stock status & price <= $6.00
 """
@@ -13,8 +13,9 @@ import asyncio
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Callable, Awaitable
 
-from playwright.async_api import Browser, Page, async_playwright
+from playwright.async_api import Browser, BrowserContext, Page, Request, async_playwright
 
 from mm2hunter.config import ScraperConfig, ValidationConfig
 from mm2hunter.utils.logging import get_logger
@@ -35,6 +36,7 @@ class ValidationResult:
     harvester_price: float | None = None
     passed: bool = False
     error: str | None = None
+    stripe_evidence: list[str] = field(default_factory=list)
     discovered_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -57,15 +59,85 @@ class ValidationResult:
 # Regex / keyword helpers
 # ---------------------------------------------------------------------------
 
-STRIPE_INDICATORS = [
+# ---- HTML / DOM string indicators ----
+STRIPE_HTML_INDICATORS = [
+    # Script sources
     "js.stripe.com",
+    "stripe.com/v3",
+    "stripe.com/v2",
+    # Branding
     "powered by stripe",
-    "stripe.com",
+    "powered by <a",  # partial anchor with Stripe branding
+    # JS SDK object names
+    "stripe.js",
     "stripe-js",
     "stripe elements",
+    "@stripe/stripe-js",
+    "@stripe/react-stripe-js",
+    # Public keys
     "pk_live_",
     "pk_test_",
-    'class="StripeElement"',
+    # DOM class / id markers
+    'class="stripeelement"',
+    "__stripe_mid",
+    "__stripe_sid",
+    "stripe-payment",
+    "stripe-card",
+    "stripe-element",
+    "stripe-form",
+    "data-stripe",
+    "stripecheckout",
+    "stripe_publishable",
+    "stripe_public_key",
+    # Checkout / Payment Intents / Setup Intents
+    "checkout.stripe.com",
+    "api.stripe.com",
+    "m.stripe.com",
+    "m.stripe.network",
+    "q.stripe.com",
+    "r.stripe.com",
+    "hooks.stripe.com",
+    "invoice.stripe.com",
+    "billing.stripe.com",
+    # Meta / CSP headers sometimes mention stripe
+    "connect.stripe.com",
+]
+
+# ---- Network URL patterns that indicate Stripe activity ----
+STRIPE_NETWORK_PATTERNS = [
+    re.compile(r"js\.stripe\.com", re.I),
+    re.compile(r"api\.stripe\.com", re.I),
+    re.compile(r"m\.stripe\.com", re.I),
+    re.compile(r"m\.stripe\.network", re.I),
+    re.compile(r"q\.stripe\.com", re.I),
+    re.compile(r"r\.stripe\.com", re.I),
+    re.compile(r"checkout\.stripe\.com", re.I),
+    re.compile(r"hooks\.stripe\.com", re.I),
+    re.compile(r"billing\.stripe\.com", re.I),
+    re.compile(r"connect\.stripe\.com", re.I),
+    re.compile(r"invoice\.stripe\.com", re.I),
+    re.compile(r"merchant-ui-api\.stripe\.com", re.I),
+    re.compile(r"pay\.stripe\.com", re.I),
+    re.compile(r"payments\.stripe\.com", re.I),
+]
+
+# ---- Patterns to search inside <script> tag contents ----
+STRIPE_SCRIPT_PATTERNS = [
+    re.compile(r"Stripe\s*\(", re.I),               # new Stripe( or Stripe(
+    re.compile(r"loadStripe\s*\(", re.I),            # loadStripe(
+    re.compile(r"stripe\.createPaymentMethod", re.I),
+    re.compile(r"stripe\.confirmCardPayment", re.I),
+    re.compile(r"stripe\.confirmPayment", re.I),
+    re.compile(r"stripe\.createToken", re.I),
+    re.compile(r"stripe\.createSource", re.I),
+    re.compile(r"stripe\.elements\s*\(", re.I),
+    re.compile(r"stripe\.redirectToCheckout", re.I),
+    re.compile(r"stripe\.paymentRequest", re.I),
+    re.compile(r"stripe\.handleCardAction", re.I),
+    re.compile(r"createPaymentIntent", re.I),
+    re.compile(r"payment_intent", re.I),
+    re.compile(r"client_secret.*pi_", re.I),
+    re.compile(r"pk_(live|test)_[A-Za-z0-9]+", re.I),
 ]
 
 WALLET_KEYWORDS = [
@@ -79,6 +151,9 @@ WALLET_KEYWORDS = [
 ]
 
 PRICE_RE = re.compile(r"\$\s?(\d{1,4}(?:\.\d{1,2})?)")
+
+# Type alias for result callback
+ResultCallback = Callable[[ValidationResult], Awaitable[None]] | Callable[[ValidationResult], None] | None
 
 
 # ---------------------------------------------------------------------------
@@ -97,8 +172,16 @@ class SiteValidator:
         self._vcfg = validation_cfg
 
     # ------------------------------------------------------------------
-    async def validate_many(self, urls: list[str]) -> list[ValidationResult]:
+    async def validate_many(
+        self,
+        urls: list[str],
+        on_result: ResultCallback = None,
+    ) -> list[ValidationResult]:
         """Validate a list of URLs concurrently.
+
+        If *on_result* is provided, it is called with each
+        ``ValidationResult`` as soon as the validation of that URL
+        completes – enabling real-time file writes.
 
         * **max_concurrency** limits simultaneous browser tabs (semaphore).
         * **max_threads** controls how many URL-worker tasks are spawned
@@ -122,7 +205,13 @@ class SiteValidator:
 
             async def _bounded(url: str) -> ValidationResult:
                 async with sem:
-                    return await self._validate_one(browser, url)
+                    result = await self._validate_one(browser, url)
+                    # Fire the callback immediately
+                    if on_result is not None:
+                        ret = on_result(result)
+                        if asyncio.iscoroutine(ret) or asyncio.isfuture(ret):
+                            await ret
+                    return result
 
             all_results: list[ValidationResult] = []
             # Process URLs in chunks of `threads` size
@@ -147,7 +236,7 @@ class SiteValidator:
     async def _validate_one(self, browser: Browser, url: str) -> ValidationResult:
         """Run all checks on a single URL."""
         result = ValidationResult(url=url)
-        context = None
+        context: BrowserContext | None = None
         try:
             context = await browser.new_context(
                 user_agent=self._scfg.user_agent,
@@ -156,7 +245,21 @@ class SiteValidator:
             )
             page = await context.new_page()
 
-            # Block heavy resources to speed up loading
+            # ----------------------------------------------------------
+            # Network-level Stripe detection: intercept all requests
+            # ----------------------------------------------------------
+            network_stripe_hits: list[str] = []
+
+            def _on_request(request: Request) -> None:
+                req_url = request.url
+                for pat in STRIPE_NETWORK_PATTERNS:
+                    if pat.search(req_url):
+                        network_stripe_hits.append(req_url)
+                        break
+
+            page.on("request", _on_request)
+
+            # Block heavy resources to speed up loading (but allow JS!)
             await page.route(
                 "**/*.{png,jpg,jpeg,gif,svg,webp,mp4,webm,woff,woff2}",
                 lambda route: route.abort(),
@@ -170,8 +273,10 @@ class SiteValidator:
             html = await page.content()
             html_lower = html.lower()
 
-            # 1. Stripe detection
-            result.has_stripe = self._detect_stripe(html_lower)
+            # 1. Stripe detection (deep multi-layer)
+            result.has_stripe, result.stripe_evidence = await self._detect_stripe_deep(
+                page, html, html_lower, network_stripe_hits
+            )
 
             # 2. Wallet / Add-Funds detection
             result.has_wallet = self._detect_wallet(html_lower)
@@ -197,22 +302,167 @@ class SiteValidator:
                 await context.close()
 
         status = "PASS" if result.passed else "FAIL"
-        logger.info("[%s] %s  stripe=%s wallet=%s price=%s stock=%s",
-                     status, url[:80], result.has_stripe, result.has_wallet,
-                     result.harvester_price, result.harvester_in_stock)
+        evidence_str = ", ".join(result.stripe_evidence[:3]) if result.stripe_evidence else "none"
+        logger.info(
+            "[%s] %s  stripe=%s(%s) wallet=%s price=%s stock=%s",
+            status, url[:80], result.has_stripe, evidence_str,
+            result.has_wallet, result.harvester_price, result.harvester_in_stock,
+        )
         return result
 
     # ------------------------------------------------------------------
-    # Detection helpers
+    # Stripe detection – deep multi-layer analysis
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _detect_stripe(html_lower: str) -> bool:
-        return any(ind.lower() in html_lower for ind in STRIPE_INDICATORS)
+    async def _detect_stripe_deep(
+        self,
+        page: Page,
+        html: str,
+        html_lower: str,
+        network_hits: list[str],
+    ) -> tuple[bool, list[str]]:
+        """Perform deep Stripe detection across multiple layers.
+
+        Returns (detected: bool, evidence: list[str]).
+        """
+        evidence: list[str] = []
+
+        # ---- Layer 1: HTML string indicators ----
+        for indicator in STRIPE_HTML_INDICATORS:
+            if indicator.lower() in html_lower:
+                evidence.append(f"html:{indicator}")
+
+        # ---- Layer 2: Network requests ----
+        for hit in network_hits:
+            evidence.append(f"network:{hit[:80]}")
+
+        # ---- Layer 3: Inline <script> content analysis ----
+        try:
+            script_elements = await page.query_selector_all("script:not([src])")
+            for el in script_elements[:30]:  # cap to avoid slowness
+                try:
+                    text_content = await el.text_content()
+                    if text_content:
+                        for pat in STRIPE_SCRIPT_PATTERNS:
+                            if pat.search(text_content):
+                                evidence.append(f"inline_script:{pat.pattern[:40]}")
+                                break  # one match per script tag is enough
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # ---- Layer 4: External script src attributes ----
+        try:
+            ext_scripts = await page.query_selector_all("script[src]")
+            for el in ext_scripts:
+                src = await el.get_attribute("src") or ""
+                src_lower = src.lower()
+                if "stripe" in src_lower:
+                    evidence.append(f"script_src:{src[:80]}")
+        except Exception:
+            pass
+
+        # ---- Layer 5: DOM element inspection ----
+        try:
+            stripe_dom_selectors = [
+                '[class*="stripe" i]',
+                '[id*="stripe" i]',
+                '[data-stripe]',
+                '[data-stripe-key]',
+                '[data-stripe-publishable-key]',
+                'iframe[src*="stripe"]',
+                'iframe[name*="stripe"]',
+                'iframe[title*="stripe" i]',
+                '[class*="StripeElement"]',
+                '[class*="__PrivateStripeElement"]',
+            ]
+            for selector in stripe_dom_selectors:
+                try:
+                    matches = await page.query_selector_all(selector)
+                    if matches:
+                        evidence.append(f"dom:{selector}({len(matches)})")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # ---- Layer 6: iframe deep inspection ----
+        try:
+            frames = page.frames
+            for frame in frames:
+                try:
+                    frame_url = frame.url.lower()
+                    if "stripe" in frame_url:
+                        evidence.append(f"iframe_url:{frame.url[:80]}")
+                    # Check frame name
+                    frame_name = frame.name.lower() if frame.name else ""
+                    if "stripe" in frame_name:
+                        evidence.append(f"iframe_name:{frame.name}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # ---- Layer 7: JavaScript global variable check ----
+        try:
+            js_check = await page.evaluate("""() => {
+                const indicators = [];
+                if (typeof Stripe !== 'undefined') indicators.push('Stripe_global');
+                if (typeof StripeCheckout !== 'undefined') indicators.push('StripeCheckout_global');
+                if (window.__stripe_mid) indicators.push('__stripe_mid');
+                if (window.__stripe_sid) indicators.push('__stripe_sid');
+                if (document.querySelector('[data-stripe]')) indicators.push('data-stripe_attr');
+                // Check for Stripe in meta tags (CSP, etc.)
+                const metas = document.querySelectorAll('meta[content*="stripe"]');
+                if (metas.length > 0) indicators.push('meta_stripe(' + metas.length + ')');
+                // Check for Stripe payment form elements
+                const stripeInputs = document.querySelectorAll(
+                    'input[name*="stripe"], input[data-stripe], [data-elements-stable-field-name]'
+                );
+                if (stripeInputs.length > 0) indicators.push('stripe_inputs(' + stripeInputs.length + ')');
+                // Check cookies
+                try {
+                    if (document.cookie.includes('__stripe')) indicators.push('stripe_cookie');
+                } catch(e) {}
+                return indicators;
+            }""")
+            for ind in (js_check or []):
+                evidence.append(f"js:{ind}")
+        except Exception:
+            pass
+
+        # ---- Layer 8: Check response headers / CSP for stripe domains ----
+        # (We already captured network requests; also check the main page's
+        #  Content-Security-Policy or other headers via meta tags.)
+        try:
+            csp_meta = await page.query_selector_all(
+                'meta[http-equiv="Content-Security-Policy"]'
+            )
+            for meta in csp_meta:
+                content = (await meta.get_attribute("content") or "").lower()
+                if "stripe" in content:
+                    evidence.append("csp_meta:stripe_in_policy")
+        except Exception:
+            pass
+
+        # De-duplicate evidence
+        evidence = list(dict.fromkeys(evidence))
+
+        detected = len(evidence) > 0
+        return detected, evidence
+
+    # ------------------------------------------------------------------
+    # Wallet / Add-Funds detection
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _detect_wallet(html_lower: str) -> bool:
         return any(kw in html_lower for kw in WALLET_KEYWORDS)
+
+    # ------------------------------------------------------------------
+    # Harvester item detection
+    # ------------------------------------------------------------------
 
     async def _check_harvester(
         self, page: Page, html_lower: str, result: ValidationResult
