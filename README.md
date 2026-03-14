@@ -5,7 +5,10 @@ Automated search and validation tool for discovering Roblox **Murder Mystery 2**
 ## Features
 
 - **Search & Discovery** -- generates advanced Google queries via the Serper.dev API to find MM2 shops
+- **Custom Queries from File** -- load search queries from a TXT file (one query per line)
+- **Multi-Page Search** -- configure how many result pages to fetch per query for more results
 - **API Key Auto-Rotation** -- pool of Serper.dev keys with automatic failover on 403/429/exhaustion
+- **Pre-Validation URL Export** -- saves all discovered URLs to `discovered_urls.txt` before validation starts
 - **Playwright Scraping** -- headless Chromium visits each discovered site and validates:
   - Stripe payment gateway (DOM scanning for `js.stripe.com`, Stripe elements, etc.)
   - Wallet / "Add Funds" system
@@ -13,7 +16,7 @@ Automated search and validation tool for discovering Roblox **Murder Mystery 2**
 - **Concurrent Validation** -- configurable concurrency with asyncio semaphore
 - **Proxy Support** -- route requests through rotating proxies to avoid IP bans
 - **Reporting** -- exports results to **JSON** and **CSV**
-- **Web Dashboard** -- lightweight aiohttp dashboard with stats, table, and download buttons
+- **Web Dashboard** -- lightweight aiohttp dashboard with stats, table, discovered URLs tab, and download buttons
 
 ## Project Structure
 
@@ -38,6 +41,7 @@ mm2Hunter/
 │   ├── test_config.py
 │   ├── test_key_manager.py
 │   ├── test_exporter.py
+│   ├── test_search_engine.py
 │   └── test_validator.py
 ├── pyproject.toml
 ├── requirements.txt
@@ -74,16 +78,38 @@ cp .env.example .env
 # Search + validate + export reports
 mm2hunter search
 
+# Search with custom queries from a file
+mm2hunter search --queries-file my_queries.txt
+
+# Search with 3 pages of results per query
+mm2hunter search --pages 3
+
+# Combine both options
+mm2hunter search -q my_queries.txt -p 3
+
 # Start the web dashboard (reads data/ folder)
 mm2hunter dashboard
 
 # Do both: run pipeline then serve dashboard
 mm2hunter run
+mm2hunter run -q queries.txt -p 2
 ```
 
-### 4. View Results
+### 4. Query File Format
+
+Create a plain text file with one search query per line. Lines starting with `#` and blank lines are ignored:
+
+```text
+# My custom MM2 search queries
+"Murder Mystery 2" "Harvester" buy cheap stripe
+"MM2" godly shop "add funds" wallet
+"Roblox MM2" items store harvester
+```
+
+### 5. View Results
 
 - **Dashboard**: open `http://localhost:8080` in your browser
+- **Discovered URLs** (pre-validation): `data/discovered_urls.txt`
 - **JSON**: `data/results.json`
 - **CSV**: `data/results.csv`
 
@@ -94,6 +120,8 @@ All settings are driven by environment variables (or a `.env` file):
 | Variable | Default | Description |
 |---|---|---|
 | `SERPER_API_KEYS` | *(required)* | Comma-separated Serper.dev API keys |
+| `SERPER_PAGES_PER_QUERY` | `1` | Number of result pages per query (more pages = more results) |
+| `QUERIES_FILE` | *(none)* | Path to a TXT file with custom queries (one per line) |
 | `SCRAPER_HEADLESS` | `true` | Run Playwright in headless mode |
 | `SCRAPER_TIMEOUT_MS` | `30000` | Page-load timeout in milliseconds |
 | `SCRAPER_MAX_CONCURRENCY` | `5` | Max concurrent browser tabs |
@@ -110,6 +138,15 @@ A site **passes** when all of the following are true:
 3. Harvester item found on the site
 4. Harvester is currently in stock
 5. Harvester price is **<= $6.00**
+
+## Output Files
+
+| File | Description |
+|---|---|
+| `data/discovered_urls.txt` | All URLs found by search, saved **before** validation |
+| `data/results.json` | Full validation results in JSON format |
+| `data/results.csv` | Full validation results in CSV format |
+| `data/stats.json` | Summary statistics for the dashboard |
 
 ## Running Tests
 

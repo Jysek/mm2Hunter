@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from dotenv import load_dotenv
 
@@ -31,11 +31,17 @@ class SerperConfig:
     base_url: str = "https://google.serper.dev/search"
     results_per_query: int = 20  # num param sent to Serper
     max_retries_per_key: int = 2
+    pages_per_query: int = 1  # how many pages of results to fetch per query
+    queries_file: Optional[str] = None  # path to a TXT file with custom queries
 
     def __post_init__(self) -> None:
         raw = os.getenv("SERPER_API_KEYS", "")
         if raw:
             self.api_keys = [k.strip() for k in raw.split(",") if k.strip()]
+        pages = os.getenv("SERPER_PAGES_PER_QUERY")
+        if pages:
+            self.pages_per_query = max(1, int(pages))
+        self.queries_file = os.getenv("QUERIES_FILE") or None
 
 
 @dataclass

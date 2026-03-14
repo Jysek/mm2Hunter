@@ -3,13 +3,14 @@ Lightweight web dashboard served with aiohttp.
 
 Displays discovered MM2 shops that passed validation in a clean table,
 with live stats and the ability to download CSV/JSON exports.
+Also shows discovered (pre-validation) URLs.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from aiohttp import web
 
@@ -20,6 +21,8 @@ logger = get_logger("dashboard")
 
 # ---------------------------------------------------------------------------
 # HTML template (self-contained, no external assets)
+# NOTE: We use str.format() so we must double every literal { } that is NOT
+#       a placeholder.  CSS / JS braces → {{ }}
 # ---------------------------------------------------------------------------
 
 HTML_TEMPLATE = """\
@@ -30,37 +33,49 @@ HTML_TEMPLATE = """\
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>MM2 Shop Discovery &mdash; Dashboard</title>
 <style>
-  :root { --bg:#0f1117; --card:#1a1d27; --accent:#6c63ff; --green:#00e676;
-          --red:#ff5252; --txt:#e0e0e0; --muted:#888; }
-  * { box-sizing:border-box; margin:0; padding:0; }
-  body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg);
-         color:var(--txt); padding:2rem; }
-  h1 { color:var(--accent); margin-bottom:.25rem; font-size:1.8rem; }
-  .subtitle { color:var(--muted); margin-bottom:1.5rem; font-size:.95rem; }
-  .stats { display:flex; gap:1rem; flex-wrap:wrap; margin-bottom:1.5rem; }
-  .stat { background:var(--card); border-radius:10px; padding:1rem 1.5rem;
-          min-width:150px; text-align:center; }
-  .stat .num { font-size:2rem; font-weight:700; }
-  .stat .lbl { color:var(--muted); font-size:.8rem; text-transform:uppercase; }
-  table { width:100%%; border-collapse:collapse; margin-top:1rem; }
-  th, td { padding:.65rem 1rem; text-align:left; border-bottom:1px solid #2a2d3a; }
-  th { background:var(--card); color:var(--accent); font-size:.8rem;
-       text-transform:uppercase; letter-spacing:.04em; position:sticky; top:0; }
-  tr:hover { background:#1e2130; }
-  .badge { display:inline-block; padding:2px 8px; border-radius:4px;
-           font-size:.75rem; font-weight:600; }
-  .badge.pass { background:var(--green); color:#000; }
-  .badge.fail { background:var(--red); color:#fff; }
-  .badge.yes  { background:#1b5e20; color:var(--green); }
-  .badge.no   { background:#b71c1c33; color:var(--red); }
-  a { color:var(--accent); text-decoration:none; }
-  a:hover { text-decoration:underline; }
-  .actions { margin-bottom:1.5rem; }
-  .btn { display:inline-block; padding:.5rem 1.2rem; border-radius:6px;
+  :root {{ --bg:#0f1117; --card:#1a1d27; --accent:#6c63ff; --green:#00e676;
+          --red:#ff5252; --txt:#e0e0e0; --muted:#888; }}
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{ font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg);
+         color:var(--txt); padding:2rem; }}
+  h1 {{ color:var(--accent); margin-bottom:.25rem; font-size:1.8rem; }}
+  h2 {{ color:var(--accent); margin-top:2rem; margin-bottom:.75rem; font-size:1.3rem; }}
+  .subtitle {{ color:var(--muted); margin-bottom:1.5rem; font-size:.95rem; }}
+  .stats {{ display:flex; gap:1rem; flex-wrap:wrap; margin-bottom:1.5rem; }}
+  .stat {{ background:var(--card); border-radius:10px; padding:1rem 1.5rem;
+          min-width:150px; text-align:center; }}
+  .stat .num {{ font-size:2rem; font-weight:700; }}
+  .stat .lbl {{ color:var(--muted); font-size:.8rem; text-transform:uppercase; }}
+  table {{ width:100%; border-collapse:collapse; margin-top:1rem; }}
+  th, td {{ padding:.65rem 1rem; text-align:left; border-bottom:1px solid #2a2d3a; }}
+  th {{ background:var(--card); color:var(--accent); font-size:.8rem;
+       text-transform:uppercase; letter-spacing:.04em; position:sticky; top:0; }}
+  tr:hover {{ background:#1e2130; }}
+  .badge {{ display:inline-block; padding:2px 8px; border-radius:4px;
+           font-size:.75rem; font-weight:600; }}
+  .badge.pass {{ background:var(--green); color:#000; }}
+  .badge.fail {{ background:var(--red); color:#fff; }}
+  .badge.yes  {{ background:#1b5e20; color:var(--green); }}
+  .badge.no   {{ background:#b71c1c33; color:var(--red); }}
+  a {{ color:var(--accent); text-decoration:none; }}
+  a:hover {{ text-decoration:underline; }}
+  .actions {{ margin-bottom:1.5rem; }}
+  .btn {{ display:inline-block; padding:.5rem 1.2rem; border-radius:6px;
          background:var(--accent); color:#fff; font-weight:600;
-         text-decoration:none; margin-right:.5rem; font-size:.85rem; }
-  .btn:hover { opacity:.85; }
-  .empty { text-align:center; padding:3rem; color:var(--muted); }
+         text-decoration:none; margin-right:.5rem; font-size:.85rem; }}
+  .btn:hover {{ opacity:.85; }}
+  .empty {{ text-align:center; padding:3rem; color:var(--muted); }}
+  .url-list {{ background:var(--card); border-radius:10px; padding:1rem 1.5rem;
+              max-height:300px; overflow-y:auto; font-family:monospace;
+              font-size:.85rem; line-height:1.8; }}
+  .url-list a {{ display:block; }}
+  .tab-bar {{ display:flex; gap:0; margin-bottom:0; }}
+  .tab {{ padding:.6rem 1.5rem; background:var(--card); color:var(--muted);
+         cursor:pointer; border:none; font-size:.9rem; font-weight:600;
+         border-radius:8px 8px 0 0; }}
+  .tab.active {{ background:var(--accent); color:#fff; }}
+  .tab-content {{ display:none; }}
+  .tab-content.active {{ display:block; }}
 </style>
 </head>
 <body>
@@ -74,16 +89,38 @@ HTML_TEMPLATE = """\
   <div class="stat"><div class="num">{stripe_detected}</div><div class="lbl">Stripe</div></div>
   <div class="stat"><div class="num">{wallet_detected}</div><div class="lbl">Wallet</div></div>
   <div class="stat"><div class="num">{harvester_found}</div><div class="lbl">Harvester</div></div>
+  <div class="stat"><div class="num">{total_discovered}</div><div class="lbl">Discovered</div></div>
 </div>
 
 <div class="actions">
   <a class="btn" href="/api/results?format=json" download="mm2_results.json">Download JSON</a>
   <a class="btn" href="/api/results?format=csv" download="mm2_results.csv">Download CSV</a>
+  <a class="btn" href="/api/discovered" download="discovered_urls.txt">Download Discovered URLs</a>
 </div>
 
+<div class="tab-bar">
+  <button class="tab active" onclick="switchTab('validated')">Validated Results</button>
+  <button class="tab" onclick="switchTab('discovered')">Discovered URLs (pre-validation)</button>
+</div>
+
+<div id="tab-validated" class="tab-content active">
 {table_html}
+</div>
+
+<div id="tab-discovered" class="tab-content">
+{discovered_html}
+</div>
 
 <p class="subtitle" style="margin-top:2rem;">Generated: {generated_at}</p>
+
+<script>
+function switchTab(name) {{
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  event.target.classList.add('active');
+}}
+</script>
 </body>
 </html>
 """
@@ -102,7 +139,7 @@ ROW_TEMPLATE = """\
 
 def _build_table(results: List[Dict]) -> str:
     if not results:
-        return '<div class="empty">No results yet. Run a search first.</div>'
+        return '<div class="empty">No validated results yet. Run a search first.</div>'
     rows = []
     for r in results:
         price = r.get("harvester_price")
@@ -129,6 +166,16 @@ def _build_table(results: List[Dict]) -> str:
     return header + "\n".join(rows) + "</tbody></table>"
 
 
+def _build_discovered_html(urls: List[str]) -> str:
+    """Build the discovered URLs panel."""
+    if not urls:
+        return '<div class="empty">No discovered URLs yet. Run a search first.</div>'
+    links = "\n".join(
+        f'<a href="{u}" target="_blank" rel="noopener">{u}</a>' for u in urls
+    )
+    return f'<div class="url-list">{links}</div>'
+
+
 # ---------------------------------------------------------------------------
 # aiohttp application
 # ---------------------------------------------------------------------------
@@ -143,32 +190,61 @@ class Dashboard:
         self._app.router.add_get("/", self._handle_index)
         self._app.router.add_get("/api/results", self._handle_api_results)
         self._app.router.add_get("/api/stats", self._handle_api_stats)
+        self._app.router.add_get("/api/discovered", self._handle_api_discovered)
+        self._runner: web.AppRunner | None = None
 
     # ------------------------------------------------------------------
     def _load_results(self) -> List[Dict]:
         json_path = self._data_dir / "results.json"
         if not json_path.exists():
             return []
-        with open(json_path, encoding="utf-8") as fh:
-            return json.load(fh)
+        try:
+            with open(json_path, encoding="utf-8") as fh:
+                return json.load(fh)
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Failed to load results.json: %s", exc)
+            return []
 
-    def _load_stats(self) -> Dict:
+    def _load_stats(self) -> Dict[str, Any]:
         stats_path = self._data_dir / "stats.json"
         if stats_path.exists():
-            with open(stats_path, encoding="utf-8") as fh:
-                return json.load(fh)
+            try:
+                with open(stats_path, encoding="utf-8") as fh:
+                    return json.load(fh)
+            except (json.JSONDecodeError, OSError):
+                pass
         return {
             "total_scanned": 0, "total_passed": 0, "total_failed": 0,
             "stripe_detected": 0, "wallet_detected": 0, "harvester_found": 0,
-            "generated_at": "",
+            "generated_at": "—",
         }
+
+    def _load_discovered_urls(self) -> List[str]:
+        """Load the pre-validation discovered URLs from TXT."""
+        txt_path = self._data_dir / "discovered_urls.txt"
+        if not txt_path.exists():
+            return []
+        try:
+            with open(txt_path, encoding="utf-8") as fh:
+                return [line.strip() for line in fh if line.strip()]
+        except OSError:
+            return []
 
     # ------------------------------------------------------------------
     async def _handle_index(self, request: web.Request) -> web.Response:
         results = self._load_results()
         stats = self._load_stats()
+        discovered = self._load_discovered_urls()
+
         table_html = _build_table(results)
-        html = HTML_TEMPLATE.format(table_html=table_html, **stats)
+        discovered_html = _build_discovered_html(discovered)
+
+        html = HTML_TEMPLATE.format(
+            table_html=table_html,
+            discovered_html=discovered_html,
+            total_discovered=len(discovered),
+            **stats,
+        )
         return web.Response(text=html, content_type="text/html")
 
     async def _handle_api_results(self, request: web.Request) -> web.Response:
@@ -186,10 +262,28 @@ class Dashboard:
     async def _handle_api_stats(self, request: web.Request) -> web.Response:
         return web.json_response(self._load_stats())
 
+    async def _handle_api_discovered(self, request: web.Request) -> web.Response:
+        """Serve the discovered_urls.txt file."""
+        txt_path = self._data_dir / "discovered_urls.txt"
+        if txt_path.exists():
+            return web.FileResponse(txt_path, headers={
+                "Content-Type": "text/plain; charset=utf-8",
+                "Content-Disposition": "attachment; filename=discovered_urls.txt",
+            })
+        return web.Response(text="No discovered URLs file yet.", status=404)
+
     # ------------------------------------------------------------------
     async def start(self) -> None:
-        runner = web.AppRunner(self._app)
-        await runner.setup()
-        site = web.TCPSite(runner, self._cfg.host, self._cfg.port)
+        """Start the aiohttp web server."""
+        self._runner = web.AppRunner(self._app)
+        await self._runner.setup()
+        site = web.TCPSite(self._runner, self._cfg.host, self._cfg.port)
         await site.start()
-        logger.info("Dashboard running at http://%s:%s", self._cfg.host, self._cfg.port)
+        logger.info(
+            "Dashboard running at http://%s:%s", self._cfg.host, self._cfg.port
+        )
+
+    async def stop(self) -> None:
+        """Gracefully stop the dashboard."""
+        if self._runner:
+            await self._runner.cleanup()
