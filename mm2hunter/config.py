@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
 
 from dotenv import load_dotenv
 
@@ -27,12 +26,12 @@ DATA_DIR.mkdir(exist_ok=True)
 class SerperConfig:
     """Serper.dev search API settings."""
 
-    api_keys: List[str] = field(default_factory=list)
+    api_keys: list[str] = field(default_factory=list)
     base_url: str = "https://google.serper.dev/search"
     results_per_query: int = 20  # num param sent to Serper
     max_retries_per_key: int = 2
     pages_per_query: int = 1  # how many pages of results to fetch per query
-    queries_file: Optional[str] = None  # path to a TXT file with custom queries
+    queries_file: str | None = None  # path to a TXT file with custom queries
 
     def __post_init__(self) -> None:
         raw = os.getenv("SERPER_API_KEYS", "")
@@ -51,6 +50,7 @@ class ScraperConfig:
     headless: bool = True
     timeout_ms: int = 30_000
     max_concurrency: int = 5
+    max_threads: int = 5  # worker tasks for validation
     user_agent: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -66,6 +66,9 @@ class ScraperConfig:
         concurrency = os.getenv("SCRAPER_MAX_CONCURRENCY")
         if concurrency:
             self.max_concurrency = int(concurrency)
+        threads = os.getenv("SCRAPER_MAX_THREADS")
+        if threads:
+            self.max_threads = int(threads)
         self.proxy_url = os.getenv("PROXY_URL") or None
 
 

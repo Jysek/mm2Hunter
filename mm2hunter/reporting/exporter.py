@@ -9,7 +9,6 @@ import csv
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
 
 from mm2hunter.scraper.validator import ValidationResult
 from mm2hunter.utils.logging import get_logger
@@ -21,7 +20,7 @@ logger = get_logger("reporter")
 # File exporters
 # ---------------------------------------------------------------------------
 
-def export_json(results: List[ValidationResult], path: Path) -> Path:
+def export_json(results: list[ValidationResult], path: Path) -> Path:
     """Write results to a JSON file."""
     data = [r.to_dict() for r in results]
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -31,7 +30,7 @@ def export_json(results: List[ValidationResult], path: Path) -> Path:
     return path
 
 
-def export_csv(results: List[ValidationResult], path: Path) -> Path:
+def export_csv(results: list[ValidationResult], path: Path) -> Path:
     """Write results to a CSV file."""
     if not results:
         logger.warning("No results to export.")
@@ -52,7 +51,7 @@ def export_csv(results: List[ValidationResult], path: Path) -> Path:
 # Summary helpers
 # ---------------------------------------------------------------------------
 
-def summary_stats(results: List[ValidationResult]) -> Dict:
+def summary_stats(results: list[ValidationResult]) -> dict:
     """Return a quick stats dict about the validation run."""
     passed = [r for r in results if r.passed]
     return {

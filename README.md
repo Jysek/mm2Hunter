@@ -4,9 +4,12 @@ Automated search and validation tool for discovering Roblox **Murder Mystery 2**
 
 ## Features
 
+- **Interactive Menu** -- no more command-line flags; choose what to do from a numbered menu
 - **Search & Discovery** -- generates advanced Google queries via the Serper.dev API to find MM2 shops
-- **Custom Queries from File** -- load search queries from a TXT file (one query per line)
-- **Multi-Page Search** -- configure how many result pages to fetch per query for more results
+- **Validate Raw URLs** -- skip search entirely and validate URLs from a text file
+- **Load Custom Queries** -- load search queries from a TXT file (one query per line)
+- **Runtime Parameters** -- configure threads, concurrency, and pages-per-query at startup
+- **Multi-Page Search** -- fetch multiple result pages per query for more results
 - **API Key Auto-Rotation** -- pool of Serper.dev keys with automatic failover on 403/429/exhaustion
 - **Pre-Validation URL Export** -- saves all discovered URLs to `discovered_urls.txt` before validation starts
 - **Playwright Scraping** -- headless Chromium visits each discovered site and validates:
@@ -24,7 +27,7 @@ Automated search and validation tool for discovering Roblox **Murder Mystery 2**
 mm2Hunter/
 ├── mm2hunter/
 │   ├── __init__.py
-│   ├── cli.py                 # CLI entry-point
+│   ├── cli.py                 # Interactive menu entry-point
 │   ├── config.py              # Central configuration (env-driven)
 │   ├── orchestrator.py        # Wires search → validate → report
 │   ├── search/
@@ -41,8 +44,8 @@ mm2Hunter/
 │   ├── test_config.py
 │   ├── test_key_manager.py
 │   ├── test_exporter.py
-│   ├── test_search_engine.py
-│   └── test_validator.py
+│   ├── test_orchestrator.py
+│   └── test_dashboard.py
 ├── pyproject.toml
 ├── requirements.txt
 ├── .env.example
@@ -75,29 +78,47 @@ cp .env.example .env
 ### 3. Run
 
 ```bash
-# Search + validate + export reports
-mm2hunter search
-
-# Search with custom queries from a file
-mm2hunter search --queries-file my_queries.txt
-
-# Search with 3 pages of results per query
-mm2hunter search --pages 3
-
-# Combine both options
-mm2hunter search -q my_queries.txt -p 3
-
-# Start the web dashboard (reads data/ folder)
-mm2hunter dashboard
-
-# Do both: run pipeline then serve dashboard
-mm2hunter run
-mm2hunter run -q queries.txt -p 2
+mm2hunter
 ```
 
-### 4. Query File Format
+The tool will display an interactive menu:
 
-Create a plain text file with one search query per line. Lines starting with `#` and blank lines are ignored:
+```
+================================================================
+   MM2 Shop Discovery Tool  --  Interactive Menu
+================================================================
+
+  1) Search              - Run search & validation pipeline
+  2) Dashboard           - Start the web dashboard only
+  3) Validate Raw URLs   - Validate URLs from a file (skip search)
+  4) Run (Search + Dash) - Full pipeline then start dashboard
+  5) Carica Query        - Load queries from file, then search
+
+Select an operation (1-5):
+```
+
+After choosing an operation (except Dashboard), you will be asked:
+
+```
+--- Runtime Parameters ---
+Number of threads (worker tasks) [5]:
+Max concurrency (simultaneous browser tabs) [5]:
+Pages per query (search result pages to fetch) [1]:
+```
+
+### 4. Operations Explained
+
+| # | Operation | Description |
+|---|-----------|-------------|
+| 1 | **Search** | Run built-in queries, validate found URLs, export reports |
+| 2 | **Dashboard** | Start the web dashboard to view existing results |
+| 3 | **Validate Raw URLs** | Provide a file with URLs (one per line) to validate directly |
+| 4 | **Run (Search + Dash)** | Full pipeline (search + validate) then serve the dashboard |
+| 5 | **Carica Query** | Load queries from a TXT file, then run search + validate |
+
+### 5. Query / URL File Format
+
+**Queries file** (one query per line, `#` for comments):
 
 ```text
 # My custom MM2 search queries
@@ -106,7 +127,15 @@ Create a plain text file with one search query per line. Lines starting with `#`
 "Roblox MM2" items store harvester
 ```
 
-### 5. View Results
+**Raw URLs file** (one URL per line, `#` for comments):
+
+```text
+# URLs to validate
+https://mm2shop.example.com
+https://another-store.example.com/harvester
+```
+
+### 6. View Results
 
 - **Dashboard**: open `http://localhost:8080` in your browser
 - **Discovered URLs** (pre-validation): `data/discovered_urls.txt`
@@ -115,16 +144,18 @@ Create a plain text file with one search query per line. Lines starting with `#`
 
 ## Configuration
 
-All settings are driven by environment variables (or a `.env` file):
+All settings are driven by environment variables (or a `.env` file).
+Runtime parameters entered via the interactive menu **override** env defaults.
 
 | Variable | Default | Description |
 |---|---|---|
 | `SERPER_API_KEYS` | *(required)* | Comma-separated Serper.dev API keys |
-| `SERPER_PAGES_PER_QUERY` | `1` | Number of result pages per query (more pages = more results) |
-| `QUERIES_FILE` | *(none)* | Path to a TXT file with custom queries (one per line) |
+| `SERPER_PAGES_PER_QUERY` | `1` | Number of result pages per query |
+| `QUERIES_FILE` | *(none)* | Path to a TXT file with custom queries |
 | `SCRAPER_HEADLESS` | `true` | Run Playwright in headless mode |
 | `SCRAPER_TIMEOUT_MS` | `30000` | Page-load timeout in milliseconds |
 | `SCRAPER_MAX_CONCURRENCY` | `5` | Max concurrent browser tabs |
+| `SCRAPER_MAX_THREADS` | `5` | Max worker tasks for batch validation |
 | `PROXY_URL` | *(none)* | Optional rotating proxy URL |
 | `DASHBOARD_HOST` | `0.0.0.0` | Dashboard bind address |
 | `DASHBOARD_PORT` | `8080` | Dashboard port |

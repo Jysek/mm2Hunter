@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from aiohttp import web
 
@@ -137,7 +137,7 @@ ROW_TEMPLATE = """\
 </tr>"""
 
 
-def _build_table(results: List[Dict]) -> str:
+def _build_table(results: list[dict]) -> str:
     if not results:
         return '<div class="empty">No validated results yet. Run a search first.</div>'
     rows = []
@@ -166,7 +166,7 @@ def _build_table(results: List[Dict]) -> str:
     return header + "\n".join(rows) + "</tbody></table>"
 
 
-def _build_discovered_html(urls: List[str]) -> str:
+def _build_discovered_html(urls: list[str]) -> str:
     """Build the discovered URLs panel."""
     if not urls:
         return '<div class="empty">No discovered URLs yet. Run a search first.</div>'
@@ -194,7 +194,7 @@ class Dashboard:
         self._runner: web.AppRunner | None = None
 
     # ------------------------------------------------------------------
-    def _load_results(self) -> List[Dict]:
+    def _load_results(self) -> list[dict]:
         json_path = self._data_dir / "results.json"
         if not json_path.exists():
             return []
@@ -205,7 +205,7 @@ class Dashboard:
             logger.warning("Failed to load results.json: %s", exc)
             return []
 
-    def _load_stats(self) -> Dict[str, Any]:
+    def _load_stats(self) -> dict[str, Any]:
         stats_path = self._data_dir / "stats.json"
         if stats_path.exists():
             try:
@@ -219,7 +219,7 @@ class Dashboard:
             "generated_at": "—",
         }
 
-    def _load_discovered_urls(self) -> List[str]:
+    def _load_discovered_urls(self) -> list[str]:
         """Load the pre-validation discovered URLs from TXT."""
         txt_path = self._data_dir / "discovered_urls.txt"
         if not txt_path.exists():

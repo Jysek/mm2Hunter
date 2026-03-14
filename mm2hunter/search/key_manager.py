@@ -4,8 +4,6 @@ Serper.dev API key pool with automatic rotation on failure.
 
 from __future__ import annotations
 
-from typing import List, Optional
-
 from mm2hunter.utils.logging import get_logger
 
 logger = get_logger("key_manager")
@@ -18,7 +16,7 @@ class KeyExhaustedError(Exception):
 class KeyManager:
     """Manages a pool of Serper.dev API keys with auto-rotation."""
 
-    def __init__(self, keys: List[str]) -> None:
+    def __init__(self, keys: list[str]) -> None:
         if not keys:
             raise ValueError(
                 "At least one Serper.dev API key is required. "

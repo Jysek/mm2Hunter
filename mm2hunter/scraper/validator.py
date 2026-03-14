@@ -13,8 +13,6 @@ import asyncio
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
-from urllib.parse import urljoin, urlparse
 
 from playwright.async_api import Browser, Page, async_playwright
 
@@ -34,14 +32,14 @@ class ValidationResult:
     has_wallet: bool = False
     harvester_found: bool = False
     harvester_in_stock: bool = False
-    harvester_price: Optional[float] = None
+    harvester_price: float | None = None
     passed: bool = False
-    error: Optional[str] = None
+    error: str | None = None
     discovered_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             "url": self.url,
             "has_stripe": self.has_stripe,
@@ -99,9 +97,15 @@ class SiteValidator:
         self._vcfg = validation_cfg
 
     # ------------------------------------------------------------------
-    async def validate_many(self, urls: List[str]) -> List[ValidationResult]:
-        """Validate a list of URLs concurrently (bounded concurrency)."""
+    async def validate_many(self, urls: list[str]) -> list[ValidationResult]:
+        """Validate a list of URLs concurrently.
+
+        * **max_concurrency** limits simultaneous browser tabs (semaphore).
+        * **max_threads** controls how many URL-worker tasks are spawned
+          per batch.  URLs are processed in chunks of *max_threads* size.
+        """
         sem = asyncio.Semaphore(self._scfg.max_concurrency)
+        threads = getattr(self._scfg, "max_threads", len(urls)) or len(urls)
 
         async with async_playwright() as pw:
             launch_args: dict = {
@@ -120,12 +124,24 @@ class SiteValidator:
                 async with sem:
                     return await self._validate_one(browser, url)
 
-            results = await asyncio.gather(
-                *[_bounded(u) for u in urls], return_exceptions=False
-            )
+            all_results: list[ValidationResult] = []
+            # Process URLs in chunks of `threads` size
+            for i in range(0, len(urls), threads):
+                chunk = urls[i : i + threads]
+                logger.info(
+                    "Processing batch %d-%d of %d URLs ...",
+                    i + 1,
+                    min(i + threads, len(urls)),
+                    len(urls),
+                )
+                batch = await asyncio.gather(
+                    *[_bounded(u) for u in chunk], return_exceptions=False
+                )
+                all_results.extend(batch)
+
             await browser.close()
 
-        return list(results)
+        return all_results
 
     # ------------------------------------------------------------------
     async def _validate_one(self, browser: Browser, url: str) -> ValidationResult:
@@ -240,7 +256,7 @@ class SiteValidator:
 
         # --- Price extraction ---
         # Strategy: look near the word "harvester" for a dollar amount
-        price_candidates: List[float] = []
+        price_candidates: list[float] = []
 
         # Search page text segments around "harvester"
         body_text = await page.inner_text("body")

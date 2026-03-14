@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Dict, List, Optional, Set
 
 import httpx
 
@@ -23,7 +22,7 @@ logger = get_logger("search_engine")
 # ---------------------------------------------------------------------------
 # Pre-built search queries targeting MM2 shops
 # ---------------------------------------------------------------------------
-DEFAULT_QUERIES: List[str] = [
+DEFAULT_QUERIES: list[str] = [
     '"Murder Mystery 2" "Harvester" "Add Funds" "Powered by Stripe"',
     '"MM2" shop "Harvester" buy "Add Funds" stripe',
     '"Murder Mystery 2" shop buy "Harvester" wallet "add funds"',
@@ -39,7 +38,7 @@ DEFAULT_QUERIES: List[str] = [
 ROTATE_STATUS_CODES = {403, 429}
 
 
-def load_queries_from_file(path: str) -> List[str]:
+def load_queries_from_file(path: str) -> list[str]:
     """Load search queries from a TXT file (one query per line).
 
     Blank lines and lines starting with '#' are ignored.
@@ -49,7 +48,7 @@ def load_queries_from_file(path: str) -> List[str]:
         logger.error("Queries file not found: %s", path)
         return []
 
-    queries: List[str] = []
+    queries: list[str] = []
     with open(file_path, encoding="utf-8") as fh:
         for line in fh:
             stripped = line.strip()
@@ -66,10 +65,10 @@ class SearchEngine:
     def __init__(self, config: SerperConfig) -> None:
         self._cfg = config
         self._km = KeyManager(config.api_keys)
-        self._seen_urls: Set[str] = set()
+        self._seen_urls: set[str] = set()
 
     # ------------------------------------------------------------------
-    def _get_queries(self) -> List[str]:
+    def _get_queries(self) -> list[str]:
         """Return the list of queries to execute.
 
         If a queries file is configured and valid, those queries are used.
@@ -85,11 +84,11 @@ class SearchEngine:
         return list(DEFAULT_QUERIES)
 
     # ------------------------------------------------------------------
-    async def search_all(self) -> List[Dict]:
+    async def search_all(self) -> list[dict]:
         """Run every query (possibly multiple pages each) and return
         de-duplicated results."""
         queries = self._get_queries()
-        all_results: List[Dict] = []
+        all_results: list[dict] = []
         pages = max(1, self._cfg.pages_per_query)
 
         for query in queries:
@@ -114,13 +113,13 @@ class SearchEngine:
         return all_results
 
     # ------------------------------------------------------------------
-    async def _search(self, query: str, *, page: int = 1) -> List[Dict]:
+    async def _search(self, query: str, *, page: int = 1) -> list[dict]:
         """Execute a single search query with automatic key rotation.
 
         Serper.dev uses a 'page' parameter (1-based) or 'start' offset.
         We use the 'page' parameter for pagination.
         """
-        payload: Dict = {
+        payload: dict = {
             "q": query,
             "num": self._cfg.results_per_query,
         }
@@ -165,9 +164,9 @@ class SearchEngine:
         return []
 
     # ------------------------------------------------------------------
-    def _parse_results(self, data: dict) -> List[Dict]:
+    def _parse_results(self, data: dict) -> list[dict]:
         """Extract organic results, de-duplicate by URL."""
-        results: List[Dict] = []
+        results: list[dict] = []
         for item in data.get("organic", []):
             url = item.get("link", "")
             if url and url not in self._seen_urls:
@@ -187,6 +186,6 @@ class SearchEngine:
         return len(self._seen_urls)
 
     @property
-    def all_discovered_urls(self) -> List[str]:
+    def all_discovered_urls(self) -> list[str]:
         """Return a sorted list of all discovered URLs."""
         return sorted(self._seen_urls)
