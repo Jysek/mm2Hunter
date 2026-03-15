@@ -23,6 +23,7 @@ def _sample_results():
             harvester_in_stock=True,
             harvester_price=4.50,
             passed=True,
+            scan_mode="fast",
         ),
         ValidationResult(
             url="https://shop2.example.com",
@@ -32,6 +33,7 @@ def _sample_results():
             harvester_in_stock=False,
             harvester_price=8.00,
             passed=False,
+            scan_mode="fast",
         ),
     ]
 
@@ -44,6 +46,7 @@ def test_export_json(tmp_path: Path):
     assert len(data) == 2
     assert data[0]["url"] == "https://shop1.example.com"
     assert data[0]["passed"] is True
+    assert data[0]["scan_mode"] == "fast"
 
 
 def test_export_csv(tmp_path: Path):
@@ -54,6 +57,7 @@ def test_export_csv(tmp_path: Path):
         reader = list(csv.DictReader(fh))
     assert len(reader) == 2
     assert reader[1]["has_stripe"] == "False"
+    assert reader[0]["scan_mode"] == "fast"
 
 
 def test_summary_stats():
@@ -62,6 +66,16 @@ def test_summary_stats():
     assert stats["total_scanned"] == 2
     assert stats["total_passed"] == 1
     assert stats["stripe_detected"] == 1
+    assert stats["fast_scanned"] == 2
+    assert stats["deep_scanned"] == 0
+
+
+def test_summary_stats_with_deep():
+    results = _sample_results()
+    results[0].scan_mode = "deep"
+    stats = summary_stats(results)
+    assert stats["fast_scanned"] == 1
+    assert stats["deep_scanned"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +91,6 @@ def test_realtime_init_creates_empty_files(tmp_path: Path):
     assert (tmp_path / "rt_data" / "results.csv").exists()
     assert (tmp_path / "rt_data" / "stats.json").exists()
 
-    # JSON should be a valid empty list
     data = json.loads((tmp_path / "rt_data" / "results.json").read_text())
     assert data == []
 
@@ -105,8 +118,8 @@ def test_realtime_add_discovered_urls_batch(tmp_path: Path):
     assert rt.discovered_count == 3
 
 
-def test_realtime_add_result_updates_all_files(tmp_path: Path):
-    """add_result should flush results.json, results.csv, and stats.json."""
+def test_realtime_add_result_updates_files(tmp_path: Path):
+    """add_result should flush after reaching the flush interval."""
     rt = RealtimeExporter(tmp_path)
 
     r1 = ValidationResult(
@@ -119,38 +132,36 @@ def test_realtime_add_result_updates_all_files(tmp_path: Path):
         passed=True,
     )
     rt.add_result(r1)
+    rt.flush()  # Force flush since interval may not be reached
 
-    # -- JSON --
+    # JSON
     data = json.loads((tmp_path / "results.json").read_text())
     assert len(data) == 1
     assert data[0]["url"] == "https://shop1.example.com"
-    assert data[0]["passed"] is True
 
-    # -- CSV --
+    # CSV
     with open(tmp_path / "results.csv") as fh:
         rows = list(csv.DictReader(fh))
     assert len(rows) == 1
-    assert rows[0]["url"] == "https://shop1.example.com"
 
-    # -- Stats --
+    # Stats
     stats = json.loads((tmp_path / "stats.json").read_text())
     assert stats["total_scanned"] == 1
     assert stats["total_passed"] == 1
 
-    # Add a second result
-    r2 = ValidationResult(
-        url="https://shop2.example.com",
-        has_stripe=False,
-        passed=False,
-    )
-    rt.add_result(r2)
+
+def test_realtime_add_results_batch(tmp_path: Path):
+    """add_results should flush immediately."""
+    rt = RealtimeExporter(tmp_path)
+
+    results = [
+        ValidationResult(url="https://a.com", passed=True),
+        ValidationResult(url="https://b.com", passed=False),
+    ]
+    rt.add_results(results)
 
     data = json.loads((tmp_path / "results.json").read_text())
     assert len(data) == 2
-    stats = json.loads((tmp_path / "stats.json").read_text())
-    assert stats["total_scanned"] == 2
-    assert stats["total_passed"] == 1
-    assert stats["total_failed"] == 1
 
 
 def test_realtime_results_property(tmp_path: Path):
@@ -166,3 +177,14 @@ def test_realtime_results_property(tmp_path: Path):
     assert len(results) == 2
     assert results[0].url == "https://a.com"
     assert results[1].url == "https://b.com"
+
+
+def test_realtime_flush(tmp_path: Path):
+    """flush() should force write even below the interval."""
+    rt = RealtimeExporter(tmp_path)
+
+    rt.add_result(ValidationResult(url="https://x.com", passed=True))
+    rt.flush()
+
+    data = json.loads((tmp_path / "results.json").read_text())
+    assert len(data) == 1

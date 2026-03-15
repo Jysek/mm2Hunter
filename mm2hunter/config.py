@@ -45,18 +45,20 @@ class SerperConfig:
 
 @dataclass
 class ScraperConfig:
-    """Playwright scraper settings."""
+    """Scraper / validator settings."""
 
     headless: bool = True
-    timeout_ms: int = 30_000
-    max_concurrency: int = 5
-    max_threads: int = 5  # worker tasks for validation
+    timeout_ms: int = 15_000  # HTTP timeout for fast scan (ms)
+    max_concurrency: int = 200  # concurrent connections for fast scan
+    max_threads: int = 200  # alias – worker tasks
+    deep_scan_concurrency: int = 5  # Playwright tabs for deep scan
     user_agent: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     )
     proxy_url: str | None = field(default=None)
+    enable_deep_scan: bool = True  # whether to run Playwright deep scan
 
     def __post_init__(self) -> None:
         self.headless = os.getenv("SCRAPER_HEADLESS", "true").lower() == "true"
@@ -69,7 +71,13 @@ class ScraperConfig:
         threads = os.getenv("SCRAPER_MAX_THREADS")
         if threads:
             self.max_threads = int(threads)
+        deep = os.getenv("SCRAPER_DEEP_SCAN_CONCURRENCY")
+        if deep:
+            self.deep_scan_concurrency = int(deep)
         self.proxy_url = os.getenv("PROXY_URL") or None
+        enable_deep = os.getenv("ENABLE_DEEP_SCAN")
+        if enable_deep is not None:
+            self.enable_deep_scan = enable_deep.lower() == "true"
 
 
 @dataclass

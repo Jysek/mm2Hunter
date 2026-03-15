@@ -3,7 +3,6 @@ Lightweight web dashboard served with aiohttp.
 
 Displays discovered MM2 shops that passed validation in a clean table,
 with live stats and the ability to download CSV/JSON exports.
-Also shows discovered (pre-validation) URLs.
 """
 
 from __future__ import annotations
@@ -20,9 +19,7 @@ from mm2hunter.utils.logging import get_logger
 logger = get_logger("dashboard")
 
 # ---------------------------------------------------------------------------
-# HTML template (self-contained, no external assets)
-# NOTE: We use str.format() so we must double every literal { } that is NOT
-#       a placeholder.  CSS / JS braces → {{ }}
+# HTML template
 # ---------------------------------------------------------------------------
 
 HTML_TEMPLATE = """\
@@ -39,13 +36,12 @@ HTML_TEMPLATE = """\
   body {{ font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg);
          color:var(--txt); padding:2rem; }}
   h1 {{ color:var(--accent); margin-bottom:.25rem; font-size:1.8rem; }}
-  h2 {{ color:var(--accent); margin-top:2rem; margin-bottom:.75rem; font-size:1.3rem; }}
   .subtitle {{ color:var(--muted); margin-bottom:1.5rem; font-size:.95rem; }}
   .stats {{ display:flex; gap:1rem; flex-wrap:wrap; margin-bottom:1.5rem; }}
   .stat {{ background:var(--card); border-radius:10px; padding:1rem 1.5rem;
-          min-width:150px; text-align:center; }}
+          min-width:130px; text-align:center; }}
   .stat .num {{ font-size:2rem; font-weight:700; }}
-  .stat .lbl {{ color:var(--muted); font-size:.8rem; text-transform:uppercase; }}
+  .stat .lbl {{ color:var(--muted); font-size:.75rem; text-transform:uppercase; }}
   table {{ width:100%; border-collapse:collapse; margin-top:1rem; }}
   th, td {{ padding:.65rem 1rem; text-align:left; border-bottom:1px solid #2a2d3a; }}
   th {{ background:var(--card); color:var(--accent); font-size:.8rem;
@@ -57,6 +53,8 @@ HTML_TEMPLATE = """\
   .badge.fail {{ background:var(--red); color:#fff; }}
   .badge.yes  {{ background:#1b5e20; color:var(--green); }}
   .badge.no   {{ background:#b71c1c33; color:var(--red); }}
+  .badge.fast {{ background:#1565c0; color:#90caf9; }}
+  .badge.deep {{ background:#6a1b9a; color:#ce93d8; }}
   a {{ color:var(--accent); text-decoration:none; }}
   a:hover {{ text-decoration:underline; }}
   .actions {{ margin-bottom:1.5rem; }}
@@ -80,7 +78,7 @@ HTML_TEMPLATE = """\
 </head>
 <body>
 <h1>MM2 Shop Discovery Tool</h1>
-<p class="subtitle">Automated Roblox Murder Mystery 2 shop finder &amp; validator</p>
+<p class="subtitle">Automated Roblox Murder Mystery 2 shop finder &amp; validator &mdash; v2.0</p>
 
 <div class="stats">
   <div class="stat"><div class="num">{total_scanned}</div><div class="lbl">Scanned</div></div>
@@ -90,6 +88,8 @@ HTML_TEMPLATE = """\
   <div class="stat"><div class="num">{wallet_detected}</div><div class="lbl">Wallet</div></div>
   <div class="stat"><div class="num">{harvester_found}</div><div class="lbl">Harvester</div></div>
   <div class="stat"><div class="num">{total_discovered}</div><div class="lbl">Discovered</div></div>
+  <div class="stat"><div class="num">{fast_scanned}</div><div class="lbl">Fast Scan</div></div>
+  <div class="stat"><div class="num">{deep_scanned}</div><div class="lbl">Deep Scan</div></div>
 </div>
 
 <div class="actions">
@@ -133,6 +133,7 @@ ROW_TEMPLATE = """\
   <td>{harvester_price}</td>
   <td><span class="badge {stock_cls}">{stock_txt}</span></td>
   <td><span class="badge {status_cls}">{status_txt}</span></td>
+  <td><span class="badge {scan_cls}">{scan_txt}</span></td>
   <td>{discovered_at}</td>
 </tr>"""
 
@@ -143,9 +144,10 @@ def _build_table(results: list[dict]) -> str:
     rows = []
     for r in results:
         price = r.get("harvester_price")
+        scan = r.get("scan_mode", "fast")
         rows.append(ROW_TEMPLATE.format(
             url=r["url"],
-            url_short=r["url"][:60] + ("..." if len(r["url"]) > 60 else ""),
+            url_short=r["url"][:55] + ("..." if len(r["url"]) > 55 else ""),
             stripe_cls="yes" if r["has_stripe"] else "no",
             stripe_txt="Yes" if r["has_stripe"] else "No",
             wallet_cls="yes" if r["has_wallet"] else "no",
@@ -155,12 +157,14 @@ def _build_table(results: list[dict]) -> str:
             stock_txt="In Stock" if r["harvester_in_stock"] else "N/A",
             status_cls="pass" if r["passed"] else "fail",
             status_txt="PASS" if r["passed"] else "FAIL",
+            scan_cls=scan,
+            scan_txt=scan.upper(),
             discovered_at=r.get("discovered_at", "")[:19],
         ))
     header = (
         "<table><thead><tr>"
         "<th>URL</th><th>Stripe</th><th>Wallet</th>"
-        "<th>Price</th><th>Stock</th><th>Status</th><th>Discovered</th>"
+        "<th>Price</th><th>Stock</th><th>Status</th><th>Scan</th><th>Discovered</th>"
         "</tr></thead><tbody>"
     )
     return header + "\n".join(rows) + "</tbody></table>"
@@ -193,7 +197,6 @@ class Dashboard:
         self._app.router.add_get("/api/discovered", self._handle_api_discovered)
         self._runner: web.AppRunner | None = None
 
-    # ------------------------------------------------------------------
     def _load_results(self) -> list[dict]:
         json_path = self._data_dir / "results.json"
         if not json_path.exists():
@@ -216,11 +219,11 @@ class Dashboard:
         return {
             "total_scanned": 0, "total_passed": 0, "total_failed": 0,
             "stripe_detected": 0, "wallet_detected": 0, "harvester_found": 0,
-            "generated_at": "—",
+            "fast_scanned": 0, "deep_scanned": 0,
+            "generated_at": "---",
         }
 
     def _load_discovered_urls(self) -> list[str]:
-        """Load the pre-validation discovered URLs from TXT."""
         txt_path = self._data_dir / "discovered_urls.txt"
         if not txt_path.exists():
             return []
@@ -230,7 +233,6 @@ class Dashboard:
         except OSError:
             return []
 
-    # ------------------------------------------------------------------
     async def _handle_index(self, request: web.Request) -> web.Response:
         results = self._load_results()
         stats = self._load_stats()
@@ -263,7 +265,6 @@ class Dashboard:
         return web.json_response(self._load_stats())
 
     async def _handle_api_discovered(self, request: web.Request) -> web.Response:
-        """Serve the discovered_urls.txt file."""
         txt_path = self._data_dir / "discovered_urls.txt"
         if txt_path.exists():
             return web.FileResponse(txt_path, headers={
@@ -272,7 +273,6 @@ class Dashboard:
             })
         return web.Response(text="No discovered URLs file yet.", status=404)
 
-    # ------------------------------------------------------------------
     async def start(self) -> None:
         """Start the aiohttp web server."""
         self._runner = web.AppRunner(self._app)
@@ -280,7 +280,7 @@ class Dashboard:
         site = web.TCPSite(self._runner, self._cfg.host, self._cfg.port)
         await site.start()
         logger.info(
-            "Dashboard running at http://%s:%s", self._cfg.host, self._cfg.port
+            "Dashboard running at http://%s:%s", self._cfg.host, self._cfg.port,
         )
 
     async def stop(self) -> None:

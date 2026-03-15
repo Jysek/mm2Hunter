@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 from aiohttp import web
-from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
 
 from mm2hunter.config import DashboardConfig
 from mm2hunter.reporting.dashboard import Dashboard
@@ -17,7 +16,6 @@ def data_dir(tmp_path: Path) -> Path:
     d = tmp_path / "data"
     d.mkdir()
 
-    # Write sample results
     results = [
         {
             "url": "https://shop1.example.com",
@@ -28,12 +26,12 @@ def data_dir(tmp_path: Path) -> Path:
             "harvester_price": 4.50,
             "passed": True,
             "error": None,
+            "scan_mode": "fast",
             "discovered_at": "2026-03-14T12:00:00+00:00",
         }
     ]
     (d / "results.json").write_text(json.dumps(results))
 
-    # Write sample stats
     stats = {
         "total_scanned": 1,
         "total_passed": 1,
@@ -41,11 +39,12 @@ def data_dir(tmp_path: Path) -> Path:
         "stripe_detected": 1,
         "wallet_detected": 1,
         "harvester_found": 1,
+        "fast_scanned": 1,
+        "deep_scanned": 0,
         "generated_at": "2026-03-14T12:00:00+00:00",
     }
     (d / "stats.json").write_text(json.dumps(stats))
 
-    # Write discovered URLs
     (d / "discovered_urls.txt").write_text(
         "https://shop1.example.com\nhttps://shop2.example.com\n"
     )
@@ -95,6 +94,7 @@ async def test_api_results_json(aiohttp_client, dashboard_app):
     data = await resp.json()
     assert len(data) == 1
     assert data[0]["passed"] is True
+    assert data[0]["scan_mode"] == "fast"
 
 
 async def test_api_stats(aiohttp_client, dashboard_app):
@@ -104,6 +104,7 @@ async def test_api_stats(aiohttp_client, dashboard_app):
     data = await resp.json()
     assert data["total_scanned"] == 1
     assert data["total_passed"] == 1
+    assert data["fast_scanned"] == 1
 
 
 async def test_api_discovered(aiohttp_client, dashboard_app):

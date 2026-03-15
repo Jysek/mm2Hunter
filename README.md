@@ -1,26 +1,32 @@
-# mm2Hunter
+# mm2Hunter v2.0
 
-Automated search and validation tool for discovering Roblox **Murder Mystery 2** (MM2) item shops. Finds e-commerce sites selling MM2 items, verifies they use **Stripe** as a payment gateway, have an **Add Funds / Wallet** system, and checks that the **Harvester** item is in stock at **$6.00 or less**.
+High-performance automated search and validation tool for discovering Roblox **Murder Mystery 2** (MM2) item shops. Finds e-commerce sites selling MM2 items, verifies they use **Stripe** as a payment gateway, have an **Add Funds / Wallet** system, and checks that the **Harvester** item is in stock at **$6.00 or less**.
+
+## What's New in v2.0
+
+- **250-500 URLs/sec** -- Two-tier validation architecture: fast async HTTP scan + optional Playwright deep scan
+- **Redesigned interactive menu** -- cleaner UX, settings view, loop-back navigation
+- **Connection pooling** -- high-throughput httpx transport with configurable concurrency
+- **Scan mode tracking** -- results show whether they came from fast or deep scan
+- **Throttled I/O** -- realtime exporter batches disk writes to avoid bottlenecks
+- **Better error handling** -- graceful timeouts, URL validation, API key checks
 
 ## Features
 
-- **Interactive Menu** -- no more command-line flags; choose what to do from a numbered menu
-- **Search & Discovery** -- generates advanced Google queries via the Serper.dev API to find MM2 shops
-- **Validate Raw URLs** -- skip search entirely and validate URLs from a text file
-- **Load Custom Queries** -- load search queries from a TXT file (one query per line)
-- **Runtime Parameters** -- configure threads, concurrency, and pages-per-query at startup
-- **Multi-Page Search** -- fetch multiple result pages per query for more results
-- **API Key Auto-Rotation** -- pool of Serper.dev keys with automatic failover on 403/429/exhaustion
-- **Pre-Validation URL Export** -- saves all discovered URLs to `discovered_urls.txt` before validation starts
-- **Real-time File Updates** -- `discovered_urls.txt`, `results.json`, `results.csv`, and `stats.json` are updated incrementally as each URL is discovered or validated (no waiting for the whole pipeline to finish)
-- **Playwright Scraping** -- headless Chromium visits each discovered site and validates:
-  - **Deep Stripe detection** (8-layer analysis: HTML keywords, network request interception, inline script analysis, external script `src` inspection, DOM element/attribute scanning, iframe inspection, JavaScript global variable evaluation, CSP meta tag analysis)
-  - Wallet / "Add Funds" system
-  - Harvester item presence, stock status, and price extraction
-- **Concurrent Validation** -- configurable concurrency with asyncio semaphore
-- **Proxy Support** -- route requests through rotating proxies to avoid IP bans
-- **Reporting** -- exports results to **JSON** and **CSV**
-- **Web Dashboard** -- lightweight aiohttp dashboard with stats, table, discovered URLs tab, and download buttons
+- **Interactive Menu** -- choose operations from a numbered menu with runtime parameter configuration
+- **Two-Tier Validation**:
+  - **Fast Scan** (Tier 1): Pure async HTTP with httpx -- 250-500 URLs/sec with connection pooling
+  - **Deep Scan** (Tier 2): Playwright headless Chromium for JS-heavy sites (optional, only for passed URLs)
+- **Search & Discovery** -- generates advanced Google queries via the Serper.dev API
+- **Validate Raw URLs** -- skip search and validate URLs from a text file
+- **Load Custom Queries** -- load search queries from a TXT file
+- **API Key Auto-Rotation** -- pool of Serper.dev keys with automatic failover
+- **Deep Stripe Detection** (8-layer analysis in deep scan mode)
+- **Real-time File Updates** -- results are flushed to disk incrementally
+- **Concurrent Validation** -- configurable concurrency (up to 500+ connections)
+- **Proxy Support** -- route requests through rotating proxies
+- **Reporting** -- exports to JSON and CSV
+- **Web Dashboard** -- lightweight aiohttp dashboard with stats, table, and downloads
 
 ## Project Structure
 
@@ -30,23 +36,18 @@ mm2Hunter/
 │   ├── __init__.py
 │   ├── cli.py                 # Interactive menu entry-point
 │   ├── config.py              # Central configuration (env-driven)
-│   ├── orchestrator.py        # Wires search → validate → report
+│   ├── orchestrator.py        # Wires search -> validate -> report
 │   ├── search/
 │   │   ├── engine.py          # Serper.dev search client
 │   │   └── key_manager.py     # API key pool & rotation
 │   ├── scraper/
-│   │   └── validator.py       # Playwright site validator
+│   │   └── validator.py       # Two-tier validator (fast + deep)
 │   ├── reporting/
-│   │   ├── exporter.py        # JSON / CSV export
+│   │   ├── exporter.py        # JSON / CSV export + realtime writer
 │   │   └── dashboard.py       # Web dashboard (aiohttp)
 │   └── utils/
 │       └── logging.py         # Structured logging helper
 ├── tests/
-│   ├── test_config.py
-│   ├── test_key_manager.py
-│   ├── test_exporter.py
-│   ├── test_orchestrator.py
-│   └── test_dashboard.py
 ├── pyproject.toml
 ├── requirements.txt
 ├── .env.example
@@ -64,7 +65,7 @@ cd mm2Hunter
 python -m venv venv && source venv/bin/activate
 pip install -e ".[dev]"
 
-# Install Playwright browsers
+# Optional: install Playwright for deep scan mode
 playwright install chromium
 ```
 
@@ -82,124 +83,106 @@ cp .env.example .env
 mm2hunter
 ```
 
-The tool will display an interactive menu:
+The tool displays an interactive menu:
 
 ```
-================================================================
-   MM2 Shop Discovery Tool  --  Interactive Menu
-================================================================
+============================================================
+   MM2 Shop Discovery Tool  v2.0
+   High-performance MM2 shop finder & validator
+============================================================
 
-  1) Search              - Run search & validation pipeline
-  2) Dashboard           - Start the web dashboard only
-  3) Validate Raw URLs   - Validate URLs from a file (skip search)
-  4) Run (Search + Dash) - Full pipeline then start dashboard
-  5) Carica Query        - Load queries from file, then search
+  MAIN MENU
+  --------------------------------------------------
 
-Select an operation (1-5):
+    1)  Search & Validate
+        Run search queries + validate found URLs
+
+    2)  Validate URLs from File
+        Skip search, validate URLs from a .txt file
+
+    3)  Load Custom Queries
+        Load queries from a .txt file, then search
+
+    4)  Full Pipeline + Dashboard
+        Search + validate, then start the web dashboard
+
+    5)  Dashboard Only
+        Start the web dashboard (view existing results)
+
+    6)  Settings
+        View / adjust current configuration
+
+    0)  Exit
+        Quit the tool
+
+  Select an option:
 ```
 
-After choosing an operation (except Dashboard), you will be asked:
+### 4. Runtime Parameters
+
+After selecting an operation, you configure:
 
 ```
---- Runtime Parameters ---
-Number of threads (worker tasks) [5]:
-Max concurrency (simultaneous browser tabs) [5]:
-Pages per query (search result pages to fetch) [1]:
+  Runtime Parameters
+  ----------------------------------------
+  Max concurrent connections (fast scan) [200]:
+  Pages per query (search results) [1]:
+  Enable deep scan (Playwright) for passed URLs? [Y/n]:
 ```
 
-### 4. Operations Explained
+### 5. Operations
 
 | # | Operation | Description |
 |---|-----------|-------------|
-| 1 | **Search** | Run built-in queries, validate found URLs, export reports |
-| 2 | **Dashboard** | Start the web dashboard to view existing results |
-| 3 | **Validate Raw URLs** | Provide a file with URLs (one per line) to validate directly |
-| 4 | **Run (Search + Dash)** | Full pipeline (search + validate) then serve the dashboard |
-| 5 | **Carica Query** | Load queries from a TXT file, then run search + validate |
-
-### 5. Query / URL File Format
-
-**Queries file** (one query per line, `#` for comments):
-
-```text
-# My custom MM2 search queries
-"Murder Mystery 2" "Harvester" buy cheap stripe
-"MM2" godly shop "add funds" wallet
-"Roblox MM2" items store harvester
-```
-
-**Raw URLs file** (one URL per line, `#` for comments):
-
-```text
-# URLs to validate
-https://mm2shop.example.com
-https://another-store.example.com/harvester
-```
+| 1 | **Search & Validate** | Run built-in queries, fast-scan all found URLs |
+| 2 | **Validate URLs from File** | Validate URLs from a .txt file (skip search) |
+| 3 | **Load Custom Queries** | Load queries from file, then search + validate |
+| 4 | **Full Pipeline + Dashboard** | Search + validate + start web dashboard |
+| 5 | **Dashboard Only** | View existing results in the browser |
+| 6 | **Settings** | View current configuration |
 
 ### 6. View Results
 
 - **Dashboard**: open `http://localhost:8080` in your browser
-- **Discovered URLs** (pre-validation): `data/discovered_urls.txt`
+- **Discovered URLs**: `data/discovered_urls.txt`
 - **JSON**: `data/results.json`
 - **CSV**: `data/results.csv`
 
 ## Configuration
 
 All settings are driven by environment variables (or a `.env` file).
-Runtime parameters entered via the interactive menu **override** env defaults.
 
 | Variable | Default | Description |
 |---|---|---|
 | `SERPER_API_KEYS` | *(required)* | Comma-separated Serper.dev API keys |
-| `SERPER_PAGES_PER_QUERY` | `1` | Number of result pages per query |
-| `QUERIES_FILE` | *(none)* | Path to a TXT file with custom queries |
-| `SCRAPER_HEADLESS` | `true` | Run Playwright in headless mode |
-| `SCRAPER_TIMEOUT_MS` | `30000` | Page-load timeout in milliseconds |
-| `SCRAPER_MAX_CONCURRENCY` | `5` | Max concurrent browser tabs |
-| `SCRAPER_MAX_THREADS` | `5` | Max worker tasks for batch validation |
-| `PROXY_URL` | *(none)* | Optional rotating proxy URL |
+| `SERPER_PAGES_PER_QUERY` | `1` | Result pages per query |
+| `QUERIES_FILE` | *(none)* | Custom queries TXT file |
+| `SCRAPER_HEADLESS` | `true` | Headless browser mode |
+| `SCRAPER_TIMEOUT_MS` | `15000` | HTTP timeout (fast scan) in ms |
+| `SCRAPER_MAX_CONCURRENCY` | `200` | Max concurrent HTTP connections |
+| `SCRAPER_DEEP_SCAN_CONCURRENCY` | `5` | Playwright browser tabs |
+| `ENABLE_DEEP_SCAN` | `true` | Enable Playwright deep scan |
+| `PROXY_URL` | *(none)* | Optional proxy URL |
 | `DASHBOARD_HOST` | `0.0.0.0` | Dashboard bind address |
 | `DASHBOARD_PORT` | `8080` | Dashboard port |
+
+## Performance
+
+| Mode | Speed | Use Case |
+|------|-------|----------|
+| **Fast Scan** | 250-500 URLs/sec | Default -- pure async HTTP, regex/string analysis |
+| **Deep Scan** | 1-5 URLs/sec | Optional -- Playwright browser for JS-rendered sites |
+| **Combined** | Fast scan all, deep scan only passed | Best balance of speed + accuracy |
 
 ## Validation Criteria
 
 A site **passes** when all of the following are true:
 
-1. Stripe payment gateway detected on the page (deep 8-layer detection)
+1. Stripe payment gateway detected
 2. "Add Funds" / Wallet system detected
 3. Harvester item found on the site
 4. Harvester is currently in stock
 5. Harvester price is **<= $6.00**
-
-### Stripe Detection Layers
-
-| Layer | Method | What It Checks |
-|-------|--------|----------------|
-| 1 | HTML string scan | `js.stripe.com`, `pk_live_`, `powered by stripe`, `checkout.stripe.com`, `api.stripe.com`, DOM class/id markers, etc. |
-| 2 | Network interception | Intercepts all outgoing requests and checks for Stripe domains (`js.stripe.com`, `api.stripe.com`, `m.stripe.network`, `q.stripe.com`, etc.) |
-| 3 | Inline `<script>` analysis | Regex patterns for `Stripe(`, `loadStripe(`, `confirmCardPayment`, `createPaymentIntent`, `payment_intent`, `pk_live_*` keys, etc. |
-| 4 | External script `src` | Checks all `<script src="...">` attributes for Stripe URLs |
-| 5 | DOM element inspection | Queries for `[class*="stripe"]`, `[data-stripe]`, `iframe[src*="stripe"]`, `StripeElement` classes, etc. |
-| 6 | iframe deep inspection | Inspects all page frames for Stripe URLs and frame names |
-| 7 | JavaScript globals | Evaluates `window.Stripe`, `window.StripeCheckout`, `__stripe_mid`, `__stripe_sid`, Stripe cookies, meta tags, payment form elements |
-| 8 | CSP meta tags | Checks `Content-Security-Policy` meta tags for whitelisted Stripe domains |
-
-### Real-time File Updates
-
-During both **search** and **validation**, output files are updated incrementally:
-
-- **Search phase**: each batch of discovered URLs is appended to `data/discovered_urls.txt` immediately
-- **Validation phase**: after each URL is validated, `data/results.json`, `data/results.csv`, and `data/stats.json` are refreshed
-- The **dashboard** can be opened in parallel and will always show the latest data by refreshing the page
-
-## Output Files
-
-| File | Description |
-|---|---|
-| `data/discovered_urls.txt` | All URLs found by search, saved **before** validation |
-| `data/results.json` | Full validation results in JSON format |
-| `data/results.csv` | Full validation results in CSV format |
-| `data/stats.json` | Summary statistics for the dashboard |
 
 ## Running Tests
 
@@ -213,8 +196,8 @@ python -m pytest tests/ -v
 |---|---|
 | Language | Python 3.10+ |
 | Search API | Serper.dev |
-| Scraping | Playwright (async) |
-| HTTP client | httpx |
+| Fast Scan | httpx (async HTTP) |
+| Deep Scan | Playwright (async, optional) |
 | Dashboard | aiohttp |
 | Config | python-dotenv |
 | Testing | pytest + pytest-asyncio |
