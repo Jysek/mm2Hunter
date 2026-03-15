@@ -4,12 +4,14 @@ Serper.dev search client – discovers MM2 shop URLs.
 Supports:
   - Built-in queries or loading custom queries from a TXT file
   - Multiple pages per query for more results
+  - Real-time callback to stream discovered URLs as they arrive
 """
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Callable
 
 import httpx
 
@@ -36,6 +38,9 @@ DEFAULT_QUERIES: list[str] = [
 ]
 
 ROTATE_STATUS_CODES = {403, 429}
+
+# Type alias for the callback that receives newly discovered URLs
+OnResultsCallback = Callable[[list[str]], None] | None
 
 
 def load_queries_from_file(path: str) -> list[str]:
@@ -84,9 +89,17 @@ class SearchEngine:
         return list(DEFAULT_QUERIES)
 
     # ------------------------------------------------------------------
-    async def search_all(self) -> list[dict]:
+    async def search_all(
+        self,
+        on_results: OnResultsCallback = None,
+    ) -> list[dict]:
         """Run every query (possibly multiple pages each) and return
-        de-duplicated results."""
+        de-duplicated results.
+
+        If *on_results* is provided it is called with the list of **new**
+        URL strings each time a query page returns results, enabling
+        real-time file writes.
+        """
         queries = self._get_queries()
         all_results: list[dict] = []
         pages = max(1, self._cfg.pages_per_query)
@@ -96,6 +109,12 @@ class SearchEngine:
                 try:
                     results = await self._search(query, page=page_num)
                     all_results.extend(results)
+
+                    # Fire the callback with newly discovered URLs
+                    if results and on_results is not None:
+                        new_urls = [r["url"] for r in results]
+                        on_results(new_urls)
+
                 except KeyExhaustedError:
                     logger.error("All API keys exhausted – stopping search early.")
                     break

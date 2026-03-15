@@ -12,8 +12,9 @@ Automated search and validation tool for discovering Roblox **Murder Mystery 2**
 - **Multi-Page Search** -- fetch multiple result pages per query for more results
 - **API Key Auto-Rotation** -- pool of Serper.dev keys with automatic failover on 403/429/exhaustion
 - **Pre-Validation URL Export** -- saves all discovered URLs to `discovered_urls.txt` before validation starts
+- **Real-time File Updates** -- `discovered_urls.txt`, `results.json`, `results.csv`, and `stats.json` are updated incrementally as each URL is discovered or validated (no waiting for the whole pipeline to finish)
 - **Playwright Scraping** -- headless Chromium visits each discovered site and validates:
-  - Stripe payment gateway (DOM scanning for `js.stripe.com`, Stripe elements, etc.)
+  - **Deep Stripe detection** (8-layer analysis: HTML keywords, network request interception, inline script analysis, external script `src` inspection, DOM element/attribute scanning, iframe inspection, JavaScript global variable evaluation, CSP meta tag analysis)
   - Wallet / "Add Funds" system
   - Harvester item presence, stock status, and price extraction
 - **Concurrent Validation** -- configurable concurrency with asyncio semaphore
@@ -164,11 +165,32 @@ Runtime parameters entered via the interactive menu **override** env defaults.
 
 A site **passes** when all of the following are true:
 
-1. Stripe payment gateway detected on the page
+1. Stripe payment gateway detected on the page (deep 8-layer detection)
 2. "Add Funds" / Wallet system detected
 3. Harvester item found on the site
 4. Harvester is currently in stock
 5. Harvester price is **<= $6.00**
+
+### Stripe Detection Layers
+
+| Layer | Method | What It Checks |
+|-------|--------|----------------|
+| 1 | HTML string scan | `js.stripe.com`, `pk_live_`, `powered by stripe`, `checkout.stripe.com`, `api.stripe.com`, DOM class/id markers, etc. |
+| 2 | Network interception | Intercepts all outgoing requests and checks for Stripe domains (`js.stripe.com`, `api.stripe.com`, `m.stripe.network`, `q.stripe.com`, etc.) |
+| 3 | Inline `<script>` analysis | Regex patterns for `Stripe(`, `loadStripe(`, `confirmCardPayment`, `createPaymentIntent`, `payment_intent`, `pk_live_*` keys, etc. |
+| 4 | External script `src` | Checks all `<script src="...">` attributes for Stripe URLs |
+| 5 | DOM element inspection | Queries for `[class*="stripe"]`, `[data-stripe]`, `iframe[src*="stripe"]`, `StripeElement` classes, etc. |
+| 6 | iframe deep inspection | Inspects all page frames for Stripe URLs and frame names |
+| 7 | JavaScript globals | Evaluates `window.Stripe`, `window.StripeCheckout`, `__stripe_mid`, `__stripe_sid`, Stripe cookies, meta tags, payment form elements |
+| 8 | CSP meta tags | Checks `Content-Security-Policy` meta tags for whitelisted Stripe domains |
+
+### Real-time File Updates
+
+During both **search** and **validation**, output files are updated incrementally:
+
+- **Search phase**: each batch of discovered URLs is appended to `data/discovered_urls.txt` immediately
+- **Validation phase**: after each URL is validated, `data/results.json`, `data/results.csv`, and `data/stats.json` are refreshed
+- The **dashboard** can be opened in parallel and will always show the latest data by refreshing the page
 
 ## Output Files
 
